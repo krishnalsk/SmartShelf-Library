@@ -1,5 +1,5 @@
 /* =====================================================================
-   Smart Library Management System (frontend demo)
+   SIMATS Library Management System (frontend demo)
    Data lives in the browser's localStorage. NOT secure – demo use only.
    ===================================================================== */
 'use strict';
