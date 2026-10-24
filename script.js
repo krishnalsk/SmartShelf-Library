@@ -1,5 +1,5 @@
 /* =====================================================================
-   SmartShelf Library – Library Management System (frontend demo)
+   Smart Library Management System (frontend demo)
    Data lives in the browser's localStorage. NOT secure – demo use only.
    ===================================================================== */
 'use strict';
@@ -11,6 +11,7 @@ const KEYS = {
   catalogVersion: 'lib_catalog_version'
 };
 const LOAN_DAYS = 14;
+const STUDENT_LOAN_LIMIT = 6;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -283,6 +284,7 @@ document.addEventListener('input', e => e.target.classList && e.target.classList
 
 /* ---------- 5. Business logic: availability, loans, fines ---------- */
 function activeLoansOf(bookId) { return db.records.filter(r => r.bookId === bookId && !r.returnDate).length; }
+function activeLoansByStudent(email) { return db.records.filter(r => r.userEmail === email && !r.returnDate).length; }
 function availableOf(book) { return Math.max(0, book.total - activeLoansOf(book.id)); }
 
 function overdueDays(rec) {
@@ -317,6 +319,9 @@ function createIssue(bookId, email) {
   if (db.records.some(r => r.bookId === bookId && r.userEmail === email && !r.returnDate)) {
     return { ok: false, msg: 'This student already has an active copy of that title.' };
   }
+  if (activeLoansByStudent(email) >= STUDENT_LOAN_LIMIT) {
+    return { ok: false, msg: 'Loan limit reached. Return a book before issuing another.' };
+  }
   const issue = todayISO();
   db.records.push({
     id: uid('r'), bookId, bookTitle: book.title, userEmail: email,
@@ -335,7 +340,7 @@ function returnBook(recordId) {
   rec.fineRate = db.settings.fineRate;
   rec.fineAmount = overdueDays(rec) * rec.fineRate;
   save(KEYS.records, db.records);
-  return { ok: true, msg: 'Book returned.' + (rec.fineAmount > 0 ? ' Fine recorded: ' + money(rec.fineAmount) + '.' : '') };
+  return { ok: true, msg: 'Book returned. The student can borrow another book now.' + (rec.fineAmount > 0 ? ' Fine recorded: ' + money(rec.fineAmount) + '.' : '') };
 }
 
 /* ---------- 6. Navigation ---------- */
@@ -441,14 +446,24 @@ function renderCatalog() {
   });
 
   const user = currentUser();
+  const limitNote = $('#borrowLimitNotice');
+  if (user && user.role === 'student') {
+    const activeLoans = activeLoansByStudent(user.email);
+    limitNote.hidden = false;
+    limitNote.textContent = 'You have ' + activeLoans + ' of ' + STUDENT_LOAN_LIMIT + ' books borrowed. Return a book to free a slot for another.';
+  } else {
+    limitNote.hidden = true;
+  }
   const grid = $('#bookGrid');
   if (!list.length) { grid.innerHTML = '<div class="card empty-card">No books match your search. Try a different word or category.</div>'; return; }
   grid.innerHTML = list.map((b, i) => {
     const avail = availableOf(b);
     const has = user && db.records.some(r => r.bookId === b.id && r.userEmail === user.email && !r.returnDate);
+    const limitReached = user && user.role === 'student' && activeLoansByStudent(user.email) >= STUDENT_LOAN_LIMIT;
     let btn;
     if (user && user.role === 'admin') btn = '';
     else if (has) btn = '<button class="btn btn-secondary btn-sm" disabled>Already borrowed</button>';
+    else if (limitReached) btn = '<button class="btn btn-secondary btn-sm" disabled>Loan limit reached</button>';
     else btn = '<button class="btn btn-primary btn-sm" data-action="borrow" data-id="' + esc(b.id) + '"' + (avail ? '' : ' disabled') + '>Borrow</button>';
     return '<article class="card book-card" style="--i:' + Math.min(i, 12) + '">' +
       '<div class="cover" style="' + coverStyle(b.category) + '"><span class="cover-letter">' + esc(b.title.charAt(0).toUpperCase()) + '</span><span class="cover-cat">' + esc(b.category) + '</span></div>' +
@@ -496,7 +511,7 @@ function renderHistory() {
   const recs = db.records.filter(r => r.userEmail === user.email).slice().reverse();
   const active = recs.filter(r => !r.returnDate).length;
   const outstanding = recs.reduce((s, r) => s + unpaidFine(r), 0);
-  $('#historyStats').innerHTML = statCard(recs.length, 'Total borrowed') + statCard(active, 'Currently issued') +
+  $('#historyStats').innerHTML = statCard(recs.length, 'Total borrowed') + statCard(active + ' / ' + STUDENT_LOAN_LIMIT, 'Active loans (limit)') +
     statCard(money(outstanding), 'Outstanding fines', outstanding > 0 ? 'warn' : '');
   $('#historyBody').innerHTML = recs.length ? recs.map(r => {
     const st = statusOf(r), fine = fineFor(r);
